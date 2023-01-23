@@ -1,0 +1,11 @@
+numpy==1.18.5
+cython==0.29.23
+opencv-contrib-python==4.6.0.66
+typeguard==2.9.1
+h5py==2.10.0
+tensorflow-estimator==1.15.1
+tensorflow==1.15.0
+protobuf==3.20.*
+pyyaml==6.0
+rospkg==1.4.0
+scipy==1.7.3

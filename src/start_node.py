@@ -1,11 +1,9 @@
 #!./env/bin/python3.7
 
-'''
-#!/usr/bin/env python
-'''
 
 IMAGE_TOPIC_NAME = "/rgb/image_raw"
 PUBLISH_TOPIC_NAME = "/poses"
+ARUCO_ENABLED = True
 
 import rospy
 from sensor_msgs.msg import Image
@@ -27,6 +25,7 @@ def start_node():
     
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     allow_gpu_growth_memory()
+    bridge = CvBridge()
 
     # Model input parameters
     phi = 0
@@ -37,17 +36,25 @@ def start_node():
 
     num_classes = len(class_to_name)
     camera_matix, dist = get_camera_params()
-    bridge = CvBridge()
-
+    
     # Build model and load weights
     session = tf.Session()
     tf.python.keras.backend.set_session(session)
     graph = tf.get_default_graph()
     model, image_size = build_model_and_load_weights(phi, num_classes, score_threshold, path_to_weights)
 
+    # ArUco detection parameters
+    if ARUCO_ENABLED:
+        aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_5X5_250)
+        aruco_params = cv2.aruco.DetectorParameters_create()
+        marker_length = 0.067 # Length of marker in m
+        marker_ID = 100
+        aruco_data = [aruco_dict, aruco_params, marker_length, marker_ID]
+
     # Starting rospy node
     pub = rospy.Publisher(PUBLISH_TOPIC_NAME, ObjectPoses, queue_size=1)
-    rospy.Subscriber(IMAGE_TOPIC_NAME, Image, inference, callback_args=[model, camera_matix, dist, image_size, translation_scale_norm, score_threshold, class_to_name, pub, bridge, graph, session], queue_size=1)
+    callback_args = [model, camera_matix, dist, image_size, translation_scale_norm, score_threshold, class_to_name, pub, bridge, graph, session, ARUCO_ENABLED, aruco_data]
+    rospy.Subscriber(IMAGE_TOPIC_NAME, Image, inference, callback_args, queue_size=1)
     rospy.init_node("efficientpose", anonymous=True)
 
     rospy.spin()
@@ -67,12 +74,20 @@ def inference(image_message, args):
     bridge = args[8]
     graph = args[9]
     session = args[10]
+    aruco_enabled = args[11]
+    aruco_data = args[12]
 
+    # Turning ROS image message into cv2 image, then into numpy array.
     color_image = np.asarray(bridge.imgmsg_to_cv2(image_message, desired_encoding='passthrough'))
 
     print("Inferencing...")
-    # Removing alpha channel
+    # Removing alpha channel, remove if input image is pure RGB
     color_image = cv2.cvtColor(color_image, cv2.COLOR_BGRA2BGR)
+    
+    base_rot = None
+    base_trans = None
+    if aruco_enabled:
+        base_rot, base_trans = get_pose_from_aruco(color_image, aruco_data, camera_matrix, dist)
 
     # Undistorting the imgae
     color_image = cv2.undistort(color_image, camera_matrix, dist)
@@ -89,20 +104,105 @@ def inference(image_message, args):
     scores, labels, rotations, translations = postprocess(scores, labels, rotations, translations, scale, score_threshold)
     
     transforms = []
-    # Turning rotations into quaternions
     for i in range(len(rotations)):
-        rotmat, _ = cv2.Rodrigues(rotations[i])
-        rotation = Rotation.from_matrix(rotmat)
-        transforms.append(Transform(translations[i], rotation.as_quat()))
+        # Turning rotation vectors into matrices
+        rotation, _ = cv2.Rodrigues(rotations[i])
+        
+        # Transforming to base frame if detected 
+        if base_rot.any() and base_trans.any():
+            print("Base ArUco detected at position: " + str(base_trans))
+            rotation, translation = change_reference_frame(rotation, translations[i], base_rot, base_trans)
+        
+        transforms.append(Transform(translation, Rotation.from_matrix(rotation).as_quat()))
 
+    # Publishing to topic
     labels = [class_to_name[label] for label in labels]
+
     msg = ObjectPoses(labels, transforms)
     rospy.loginfo(msg)
     pub.publish(msg)
 
 
-    
+def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
+    '''
+    Given an image and information on an ArUco marker and camera, returns the pose of the marker in the camera reference.
+    Args:
+        -image: numpy array containing pixel information.
+        -aruco_data: list containing four elements:
+            0) aruco_dict: dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
+            1) aruco_params: parameters for the aruco detector
+            2) marker_length: length of the marker side in m
+            3) marker_id: int representing the ID of the marker to estimate the pose of
+        -camera_matrix: 3x3 numpy array containing the camera parameters
+        -distortion matrix: 1x3, 1x5 or 1x8 numpt array containing camera distortion parameters
+    Returns:
+        -rotation: 3x3 numpy array containing the rotation matrix to the ArUco frame, or None if no ArUcos with ID equal to marker_id were found.
+        -translation: 1x3 numpy array containing the translation the the ArUco frame, or None if no ArUcos with ID equal to marker_id were found.
+    '''
 
+    # Parsing args
+    aruco_dict = aruco_data[0]
+    aruco_params= aruco_data[1]
+    marker_length = aruco_data[2]
+    marker_id = aruco_data[3]
+
+    # Detecting markers
+    (corners, ids, _) = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
+
+    if ids.any():
+        # Estimating poses
+        rvects, tvects, _ = cv2.aruco.estimatePoseSingleMarkers(corners, marker_length, camera_matrix, distortion)
+
+        # Extracting the desired marker from the identified one
+        if marker_id in ids:
+            indexes = np.where(ids == marker_id)
+
+            # If multiple of the same marker are present, only the first is considered.
+            rotation, _ = cv2.Rodrigues(rvects[indexes[0]][0])
+            translation = np.squeeze(tvects[indexes[0]][0])
+
+            return rotation, translation
+
+    # If no markers are detected, or the desired marker is not present, returns None.
+    return None, None
+
+def change_reference_frame(rotation, translation, rot_dest, trans_dest):
+    transform_object = make4x4matrix(rotation, translation)
+    transform_destination = make4x4matrix(rot_dest, trans_dest)
+
+    new_transform = np.matmul(np.linalg.inv(transform_destination), transform_object)
+
+    return unmake4x4matrix(new_transform)
+
+def make4x4matrix(rotation, translation):
+    """
+    Function that turns a rotation matrix and translation  vector into a homogeneous transform.
+    Args:
+        rotation - 3x3 numpy array containing the rotation matrix
+        translation - 1x3 numpy array containing the components of the translation vector
+    Returns
+        mat - 4x4 numpy array containing the homogeneous transform matrix
+    """
+
+    mat = np.append(rotation, np.transpose(np.expand_dims(translation, axis=0)), axis=1)
+    mat = np.append(mat, np.array([[0., 0., 0., 1.]], dtype=np.float32), axis=0)
+
+    return mat
+
+def unmake4x4matrix(matrix):
+    """
+    Function that extracts rotation and translation from a homogeneous transform.
+    Args:
+        matrix - 4x4 numpy array containing the homogeneous transform
+    Returns:
+        rotation - x3 numpy array containing the rotation matrix
+        translation - 1x3 numpy array containing the components of the translation vector
+    """
+
+    rotation = np.transpose(np.transpose(matrix[:3])[:3])
+    translation = np.transpose(matrix[:3])[3]
+
+    return rotation, translation
 
 
 def allow_gpu_growth_memory():

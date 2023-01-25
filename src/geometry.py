@@ -1,6 +1,10 @@
 import cv2
 import numpy as np
 
+'''
+Contains useful functions for working with geometric transforms.
+'''
+
 def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
     '''
     Given an image and information on an ArUco marker and camera, returns the pose of the marker in the camera reference.

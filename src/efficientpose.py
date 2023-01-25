@@ -1,4 +1,5 @@
 import rospy
+import geometry_msgs
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import Transform
 from efficientpose_ros.msg import ObjectPoses
@@ -10,14 +11,38 @@ import os
 import math
 import tensorflow as tf
 import geometry as geo
+import tf2_ros as tf2
 
 from model import build_EfficientPose
 from utils import preprocess_image
 
 class EfficientPoseROS:
+    '''
+    Class encapsulating the functions and features of a ROS node running EfficientPose for inferencing.
+    '''
 
     def __init__(self, phi, path_to_weights, class_to_name, score_threshold, translation_scale_norm, image_topic_name, calibration_topic_name, publish_topic_name, aruco_calibration = False, arucodata = None):
+        '''
+        Creates and initializes a new EfficientPose ROS node.
+        Args:
+            phi - (int) hyperparameter that sets dimensions of the neural network.
+            path_to_weights - (str) path to a .h5 file containing trained weights for the network.
+            class_to_name - dict[int -> str] associates object classes to their names
+            score_threshold - (double) minimum confidence score required to identify object
+            translation_scale_norm - (double) sets the output value's scale unit. 1=m, 100=cm, 1000=mm.
+            image_topic_name - (str) name of the topic where the node will search for images to inference.
+            calibration_topic_name - (str) name of the topic where the node will search for camera calibration parameters.
+            publish_topic_name - (str) name of the topic where the node will publish inference results.
+            aruco_calibration - (bool) indicates whether to perform external calibration using an ArUco marker. default = False.
+            arucodata - [list] data used for calibration using ArUco markers. default = None, otherwise must contain in order:
+                aruco_dict: the dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
+                aruco_params: parameters for the aruco detector
+                marker_length: length of the marker side in m
+                marker_id: int representing the ID of the marker to estimate the pose of
+        '''
+
         rospy.init_node("efficientpose", anonymous=True)
+
         os.environ['CUDA_VISIBLE_DEVICES'] = '0'
         self.session = self.allow_gpu_growth_memory()
         tf.python.keras.backend.set_session(self.session)
@@ -38,14 +63,23 @@ class EfficientPoseROS:
 
         # Extrinsic calibration using ArUco markers
         if aruco_calibration:
-            self.base_pose = self.get_base_pose_from_aruco(arucodata, image_topic_name)
+            self.base_pose = self.set_base_pose_from_aruco(arucodata, image_topic_name)
+        else:
+            self.base_pose = None
 
+        # Setting up rospy communication channels
         self.publisher = rospy.Publisher(publish_topic_name, ObjectPoses, queue_size=1)
+        self.broadcaster = tf2.TransformBroadcaster()
         rospy.Subscriber(image_topic_name, Image, self.inference, queue_size=1)
         
 
     
     def inference(self, image_message):
+        '''
+        Called whenever a new image is found. Performs inference on the image, results are both published as an ObjectPoses object on the self.publisher channel, and broadcasted using tf2.
+        Args:
+            image_message -  sensor_msgs.msg.Image object containing the image. Automatically passed when used as a callback.
+        '''
 
         # Turning ROS image message into cv2 image, then into numpy array.
         color_image = np.asarray(self.bridge.imgmsg_to_cv2(image_message, desired_encoding='passthrough'))
@@ -79,6 +113,13 @@ class EfficientPoseROS:
             else:
                 translation = translations[i]
             
+            # Creating a Transform object
+            name = self.class_to_name[labels[i]]
+            transform = self.create_transform(rotation, translation, name)
+
+            # Broadcasting
+            self.broadcaster.sendTransform(transform)
+
             transforms.append(Transform(translation, Rotation.from_matrix(rotation).as_quat()))
 
         # Publishing to topic
@@ -89,12 +130,23 @@ class EfficientPoseROS:
         self.publisher.publish(msg)
 
 
-    def get_base_pose_from_aruco(self, aruco_data, image_topic_name):
+    def set_base_pose_from_aruco(self, aruco_data, image_topic_name, timeout=5):
+        '''
+        Sets the pose of the world frame. Searches for an image on a topic, then looks for an ArUco marker in the image to use as reference
+        Args:
+            aruco_data - list of four elements:
+                0) aruco_dict: dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
+                1) aruco_params: parameters for the aruco detector
+                2) marker_length: length of the marker side in m
+                3) marker_id: int representing the ID of the marker to estimate the pose of
+            image_topic_name - string, name of the topic where the function will search for the image.
+            timeout - double, timeout for searching for an image.
+        '''
 
         try:
             print("Performing extrinsic calibration:\n Searching for calibration image on topic " + image_topic_name)
-
-            image_message = rospy.wait_for_message(image_topic_name, Image, timeout=5)
+             # Getting the image from the topic 
+            image_message = rospy.wait_for_message(image_topic_name, Image, timeout)
             print(" Found image on topic. Searching for base frame...")
             image = np.asarray(self.bridge.imgmsg_to_cv2(image_message, desired_encoding='passthrough'))
 
@@ -111,13 +163,44 @@ class EfficientPoseROS:
                 return None
 
         except rospy.ROSException:
+            # If no image is found, the world frame is considered to be the camera reference.
             print("Unable to get image for extrinsic calibration. Poses will be in camera reference.")
             return None
 
 
+    def create_transform(self, rotation, translation, name):
+        '''
+        Creates a ros geometry transform object from data.
+        Args:
+            rotation - 3x3 numpy array containing a rotation matrix
+            translation - 1x3 numpy array containing a transalation vector
+            name = string with the name of the object
+        Returns:
+            t - TransformStamped object containing position and temporal data.
+        '''
+
+        t = geometry_msgs.msg.TransformStamped()
+        t.header.frame_id = 'world'
+        t.child_frame_id = name
+        t.header.stamp = rospy.Time.now()
+
+        t.transform.translation.x = translation[0]
+        t.transform.translation.y = translation[1]
+        t.transform.translation.z = translation[2]
+
+        quaternion = Rotation.from_matrix(rotation).as_quat()
+
+        t.transform.rotation.x = quaternion[0]
+        t.transform.rotation.y = quaternion[1]
+        t.transform.rotation.z = quaternion[2]
+        t.transform.rotation.w = quaternion[3]
+
+        return t
+
+
     def build_model_and_load_weights(self, path_to_weights):
         """
-        Builds an EfficientPose model and init it with a given weight file
+        Builds an EfficientPose model and initializes it with a given weight file.
         Args:
             path_to_weights: Path to the weight file
             
@@ -148,8 +231,7 @@ class EfficientPoseROS:
 
     def allow_gpu_growth_memory(self):
         """
-            Sets allow growth GPU memory to true.
-
+            Sets allow growth GPU memory to true. Sets the current session.
         """
         config = tf.compat.v1.ConfigProto()
         config.gpu_options.allow_growth = True
@@ -159,7 +241,7 @@ class EfficientPoseROS:
 
     def get_camera_params_from_topic(self, topic_name):
         """
-        Gets camera parameters.
+        Gets camera parameters from a topic. If no parameters are found, will return default values.
         Args:
             topic_name: string, name of the topic where the camera intrinsics are published.
         Returns:
@@ -176,17 +258,20 @@ class EfficientPoseROS:
             data = rospy.wait_for_message('/rgb/camera_info/', CameraInfo, timeout=10)
             cam_mat = np.reshape(np.array(data.K), (3, 3))
             dist = np.array(data.D)
-            print("Camera matrix:\n" + str(cam_mat))
-            print("Distortion parameters:\n" + str(dist))
+            print(" Found data on topic:\n Camera matrix = " + str(cam_mat))
+            print(" Distortion parameters = " + str(dist))
         
         except rospy.ROSException:
-            print("Unable to get data from topic. Using default values (Azure Kinect camera).")
+            print("Unable to get data from topic. Using default values (Azure Kinect camera):")
 
             cam_mat = np.array([[612.6460571289062, 0.0, 638.0296020507812], 
                             [0.0, 612.36376953125, 367.6560363769531],
                             [0.0, 0.0, 1.0]], dtype=np.float32)
 
             dist = np.array([0.5059323906898499, -2.6153206825256348, 0.000860791013110429, -0.0003529376117512584, 1.4836950302124023, 0.3840336799621582, -2.438732385635376, 1.4119256734848022], dtype = np.float32)
+
+            print(" Camera matrix = " + str(cam_mat))
+            print(" Distortion parameters = " + str(dist))
         
         return cam_mat, dist
 
@@ -214,7 +299,7 @@ class EfficientPoseROS:
 
     def postprocess(self, scores, labels, rotations, translations):
         """
-        Filter out detections with low confidence scores and rescale the outputs of EfficientPose
+        Filters out detections with low confidence scores and rescales the outputs of EfficientPose
         Args:
             scores: numpy array [batch_size = 1, max_detections] containing the confidence scores
             labels: numpy array [batch_size = 1, max_detections] containing class label
@@ -253,7 +338,7 @@ class EfficientPoseROS:
             input_vector: numpy array [fx, fy, px, py, translation_scale_norm, image_scale]
 
         """
-        #input_vector = [fx, fy, px, py, translation_scale_norm, image_scale]
+        
         input_vector = np.zeros((6,), dtype = np.float32)
         
         input_vector[0] = self.camera_matrix[0, 0]

@@ -14,16 +14,45 @@ sudo apt install python3.7
 ```
 
 ## Installation Instructions
-1. Navigate to your workspaces's `src` (`/path/to/workspace/src`) and clone this repo.
-2. Navigate to the repo source and create a python 3.7 environment, then activate it.
+EfficientPose-ROS is built using catkin.
+1. Navigate to your workspaces's `src` (ususally `~/catkin_ws/src`) and clone this repo.
+2. Create a python 3.7 environment wherever is most convenient, then activate it.
 ```
-cd EfficientPose-ROS/src
-python3.7 -m venv env
-source env/bin/activate
+python3.7 -m venv /path/to/env
+source /path/to/env/bin/activate
+```
+To make sure that the interpreter for this environment is used by the node, change the first line in `start_node.py` to:
+```
+#!/path/to/env/bin/python3.7
 ```
 3. Install required libraries with pip:
 ```
-pip install -r ../requirements.txt
+pip install -r EfficientPose-ROS/requirements.txt
 ```
+4. Build using `catkin build` or `catkin_make`.
 
+## Configuration
+Configuration options can be found and set inside the `start_node.py` script. Here are descriptions for some options:
+-`phi` - the hyperparameter used to set the network's dimensions. Check the [original paper](https://arxiv.org/abs/2011.04307) for more information.
+-`path_to_weights` - the locations where the pre-trained weights are stored. EfficientPose-ROS does not contain any functions for training. For that purpose, check the [original implementation](https://github.com/ybkscht/EfficientPose).
+-`translation_scale_norm` - rescales the network output according to required measurment units. 1 corresponds to metres, 1000 to millimetres.
+-`do_aruco_calibration` - optional extrinsic camera calibration using [ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) markers, by default False. If set to true, the node will attempt to do an inital extrinsic calibration by searching for a marker and using its pose as the world frame. All inferences will then be given in that frame's reference. Information on the marker must be given in the `aruco_dict`, `marker_length`, and `marker_ID` fields. CAUTION: at the moment, calibration is only performed at startup, and moving the camera successively will skew results.
+-`image_topic_name`, `calibration_topic_name` - these are the names of the ROS topics that the node will use to get images and camera intrinsics. Set these to your convenience. If you don't publish the intrinsics, you can change the camera matrix and distortion parameters' default values inside the `get_camera_params_from_topic` function in `efficientpose.py`.
+-`publish_topic_name` - the name of the topic where the node will publish poses. Poses are published using a bare-bones custom ObjectPoses message, and are also broadcasted using [tf2](http://wiki.ros.org/tf2).
 
+## Launching the node
+Assuming you have already launched a master using `roscore` or `roslaunch`:
+1. Open a fresh terminal, navigate to your catkin workspace and activate ROS:
+```
+cd /path/to/workspace/
+source /opt/ros/noetic/setup.bash # You can add this to your .bashrc and avoid inserting it every time.
+source devel/setup.bash
+```
+2. If you haven't already done so, set `start_node.py` to executable
+```
+chmod +x src/EfficientPose-Ros/src/start_node.py
+```
+3. Launch the node using `rosrun`.
+```
+rosrun efficientpose_ros start_node.py
+```

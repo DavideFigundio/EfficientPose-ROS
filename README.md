@@ -1,5 +1,5 @@
 # EfficientPose-ROS
-Implementation for running the EfficientPose 6D pose estimation network in a ROS node. The original repo for EfficientPose can be found [here](https://github.com/ybkscht/EfficientPose).
+Implementation for running the EfficientPose 6D pose estimation network in a ROS node. The original implementation of EfficientPose can be found [here](https://github.com/ybkscht/EfficientPose).
 
 ## Requirements
 This implementation has been written for [ROS Noetic](http://wiki.ros.org/noetic), which primarily targets Ubuntu 20.04. It has not been tested on other OS.
@@ -33,12 +33,12 @@ pip install -r EfficientPose-ROS/requirements.txt
 
 ## Configuration
 Configuration options can be found and set inside the `start_node.py` script. Here are descriptions for some options:
--`phi` - the hyperparameter used to set the network's dimensions. Check the [original paper](https://arxiv.org/abs/2011.04307) for more information.
--`path_to_weights` - the locations where the pre-trained weights are stored. EfficientPose-ROS does not contain any functions for training. For that purpose, check the [original implementation](https://github.com/ybkscht/EfficientPose).
--`translation_scale_norm` - rescales the network output according to required measurment units. 1 corresponds to metres, 1000 to millimetres.
--`do_aruco_calibration` - optional extrinsic camera calibration using [ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) markers, by default False. If set to true, the node will attempt to do an inital extrinsic calibration by searching for a marker and using its pose as the world frame. All inferences will then be given in that frame's reference. Information on the marker must be given in the `aruco_dict`, `marker_length`, and `marker_ID` fields. CAUTION: at the moment, calibration is only performed at startup, and moving the camera successively will skew results.
--`image_topic_name`, `calibration_topic_name` - these are the names of the ROS topics that the node will use to get images and camera intrinsics. Set these to your convenience. If you don't publish the intrinsics, you can change the camera matrix and distortion parameters' default values inside the `get_camera_params_from_topic` function in `efficientpose.py`.
--`publish_topic_name` - the name of the topic where the node will publish poses. Poses are published using a bare-bones custom ObjectPoses message, and are also broadcasted using [tf2](http://wiki.ros.org/tf2).
+- `phi` - the hyperparameter used to set the network's dimensions. Check the [original paper](https://arxiv.org/abs/2011.04307) for more information.
+- `path_to_weights` - the locations where the pre-trained weights are stored. EfficientPose-ROS does not contain any functions for training. For that purpose, check the [original implementation](https://github.com/ybkscht/EfficientPose).
+- `translation_scale_norm` - rescales the network output according to required measurment units. 1 corresponds to metres, 1000 to millimetres.
+- `do_aruco_calibration` - optional extrinsic camera calibration using [ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) markers, by default set to false. If set to true, the node will attempt to do an inital extrinsic calibration by searching for a marker and using its pose as the world frame. All inferences will then be given in that frame's reference. Information on the marker must be given in the `aruco_dict`, `marker_length`, and `marker_ID` fields. CAUTION: at the moment, calibration is only performed at startup, and moving the camera successively will skew results.
+- `image_topic_name`, `calibration_topic_name` - these are the names of the ROS topics that the node will use to get images and camera intrinsics. Set these to your convenience. If you don't publish the intrinsics, you can change the camera matrix and distortion parameters' default values inside the `get_camera_params_from_topic` function in `efficientpose.py`.
+- `publish_topic_name` - the name of the topic where the node will publish poses. Poses are published using a bare-bones custom ObjectPoses message, and are also broadcasted using [tf2](http://wiki.ros.org/tf2).
 
 ## Launching the node
 Assuming you have already launched a master using `roscore` or `roslaunch`:

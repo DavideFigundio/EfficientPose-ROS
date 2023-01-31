@@ -9,3 +9,4 @@ protobuf==3.20.*
 pyyaml==6.0
 rospkg==1.4.0
 scipy==1.7.3
+empy==3.3.4

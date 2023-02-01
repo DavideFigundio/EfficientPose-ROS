@@ -1,4 +1,4 @@
-#!./env/bin/python3.7
+#!/home/davide/envs/efficientpose-ros/bin/python3.7
 
 import rospy
 import cv2
@@ -11,13 +11,13 @@ Creates and starts a new EfficientPose ROS node.
 def start_node():
     # Model input parameters
     phi = 0
-    path_to_weights = "weights.h5"
+    path_to_weights = "./src/EfficientPose-ROS/src/buttonpose_updated.h5"
     class_to_name = {0 : "2-slot", 1 : "3-slot", 2 : "mushroombutton", 3 : "arrowbutton", 4 : "redbutton", 5 : "unknownbutton"}
     score_threshold = 0.5
     translation_scale_norm = 1.0     # conversion factor: 1 for m, 100 for cm, 1000 for mm
 
     # ArUco parameters
-    do_aruco_calibration = True
+    aruco_calibration_mode = 1 # 0: No calibration | 1: Only at startup | 2: Continuous 
     aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_5X5_250)
     aruco_params = cv2.aruco.DetectorParameters_create()
     marker_length = 0.067 # Length of marker in m
@@ -30,7 +30,7 @@ def start_node():
     publish_topic_name = "/poses"
 
     # Creation of the node
-    EfficientPoseROS(phi, path_to_weights, class_to_name, score_threshold, translation_scale_norm, image_topic_name, calibration_topic_name, publish_topic_name, aruco_calibration=do_aruco_calibration, arucodata=aruco_data)
+    EfficientPoseROS(phi, path_to_weights, class_to_name, score_threshold, translation_scale_norm, image_topic_name, calibration_topic_name, publish_topic_name, aruco_calibration_mode=aruco_calibration_mode, arucodata=aruco_data)
 
     rospy.spin()
 

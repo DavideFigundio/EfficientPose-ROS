@@ -31,7 +31,7 @@ def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
     # Detecting markers
     (corners, ids, _) = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
 
-    if ids.any():
+    if ids is not None:
         # Estimating poses
         rvects, tvects, _ = cv2.aruco.estimatePoseSingleMarkers(corners, marker_length, camera_matrix, distortion)
 
@@ -43,10 +43,10 @@ def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
             rotation, _ = cv2.Rodrigues(rvects[indexes[0]][0])
             translation = np.squeeze(tvects[indexes[0]][0])
 
-            return rotation, translation
+            return make4x4matrix(rotation, translation)
 
     # If no markers are detected, or the desired marker is not present, returns empty arrays.
-    return [], []
+    return None
 
 def change_reference_frame(rotation, translation, pose):
     """

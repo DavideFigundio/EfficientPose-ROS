@@ -105,7 +105,7 @@ generate_messages(
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
 #  INCLUDE_DIRS include
-  LIBRARIES efficientpose_ros
+  #LIBRARIES efficientpose_ros
   CATKIN_DEPENDS geometry_msgs rospy sensor_msgs message_runtime tf2_ros
   DEPENDS system_lib
 )

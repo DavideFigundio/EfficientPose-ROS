@@ -130,12 +130,12 @@ class EfficientPoseROS:
             
             # Creating a Transform object
             name = self.class_to_name[labels[i]]
-            transform = self.create_transform(rotation, translation, name)
+            transform_stamped = self.create_transform_stamped(rotation, translation, name)
 
             # Broadcasting
-            self.broadcaster.sendTransform(transform)
+            self.broadcaster.sendTransform(transform_stamped)
 
-            transforms.append(Transform(translation, Rotation.from_matrix(rotation).as_quat()))
+            transforms.append(self.create_transform(rotation, translation))
 
         # Publishing to topic
         labels = [self.class_to_name[label] for label in labels]
@@ -200,9 +200,9 @@ class EfficientPoseROS:
             print("Unable to find marker for extrinsic calibration. Pose will be in camera reference.")
 
 
-    def create_transform(self, rotation, translation, name):
+    def create_transform_stamped(self, rotation, translation, name):
         '''
-        Creates a ros geometry transform object from data.
+        Creates a ros geometry transform time-stamped object from data.
         Args:
             rotation - 3x3 numpy array containing a rotation matrix
             translation - 1x3 numpy array containing a transalation vector
@@ -226,6 +226,30 @@ class EfficientPoseROS:
         t.transform.rotation.y = quaternion[1]
         t.transform.rotation.z = quaternion[2]
         t.transform.rotation.w = quaternion[3]
+
+        return t
+
+    def create_transform(self, rotation, translation):
+        '''
+        Creates a ros geometry transform object from data.
+        Args:
+            rotation - 3x3 numpy array containing a rotation matrix
+            translation - 1x3 numpy array containing a transalation vector
+        Returns:
+            t - Transform object containing a pose.
+        '''
+        t = geometry_msgs.msg.Transform()
+
+        t.translation.x = translation[0]
+        t.translation.y = translation[1]
+        t.translation.z = translation[2]
+
+        quaternion = Rotation.from_matrix(rotation).as_quat()
+
+        t.rotation.x = quaternion[0]
+        t.rotation.y = quaternion[1]
+        t.rotation.z = quaternion[2]
+        t.rotation.w = quaternion[3]
 
         return t
 

@@ -11,7 +11,7 @@ Creates and starts a new EfficientPose ROS node.
 def start_node():
     # Model input parameters
     phi = 0
-    path_to_weights = "./src/EfficientPose-ROS/src/buttonpose_updated.h5"
+    path_to_weights = "./src/efficientpose_ros/src/buttonpose_updated.h5"
     class_to_name = {0 : "2-slot", 1 : "3-slot", 2 : "mushroombutton", 3 : "arrowbutton", 4 : "redbutton", 5 : "unknownbutton"}
     score_threshold = 0.5
     translation_scale_norm = 1.0     # conversion factor: 1 for m, 100 for cm, 1000 for mm

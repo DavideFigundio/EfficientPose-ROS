@@ -1,9 +1,40 @@
 import cv2
 import numpy as np
+import rospy
+import tf2_ros
+from scipy.spatial.transform import Rotation
 
 '''
 Contains useful functions for working with geometric transforms.
 '''
+
+def external_calibration_with_tf2(image, aruco_data, camera_matrix, distortion, base_frame_name, aruco_frame_name):
+    '''
+    Performs external calibration using both and ArUco marker and a pair of tf2 transforms.
+    Args:
+        image: numpy array containing pixel information.
+        aruco_data: list containing four elements:
+            0) aruco_dict: dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
+            1) aruco_params: parameters for the aruco detector
+            2) marker_length: length of the marker side in m
+            3) marker_id: int representing the ID of the marker to estimate the pose of
+        camera_matrix: 3x3 numpy array containing the camera parameters
+        distortion matrix: 1x3, 1x5 or 1x8 numpt array containing camera distortion parameters
+        base_frame_name: name of the tf2 transform that will be used as a base frame
+        aruco_frame_name: name of the tf2 transform corresponding to the ArUco marker.
+    Returns:
+        pose: 4x4 numpy array containing a homogeneous transform. If all parts were successful, this is the transform from the
+                camera to the base frame, otherwise this is None.
+    '''
+    
+    camera_to_aruco = get_pose_from_aruco(image, aruco_data, camera_matrix, distortion)
+
+    base_to_tcp = get_transform(base_frame_name, aruco_frame_name)
+
+    if camera_to_aruco is not None and base_to_tcp is not None:
+        return np.matmul(camera_to_aruco, np.linalg.inv(base_to_tcp))
+    
+    return None
 
 def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
     '''
@@ -18,8 +49,8 @@ def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
         camera_matrix: 3x3 numpy array containing the camera parameters
         distortion matrix: 1x3, 1x5 or 1x8 numpt array containing camera distortion parameters
     Returns:
-        rotation: 3x3 numpy array containing the rotation matrix to the ArUco frame, or None if no ArUcos with ID equal to marker_id were found.
-        translation: 1x3 numpy array containing the translation the the ArUco frame, or None if no ArUcos with ID equal to marker_id were found.
+        pose: 4x4 numpy array containing a homogeneous transform. If all parts were successful, this is the transform from the
+                camera to the ArUco marker, otherwise this is None.
     '''
 
     # Parsing args
@@ -47,6 +78,35 @@ def get_pose_from_aruco(image, aruco_data, camera_matrix, distortion):
 
     # If no markers are detected, or the desired marker is not present, returns empty arrays.
     return None
+
+def get_transform(origin_frame_name, frame_name, timeout = 5):
+    '''
+    Gets the trasform between two tf2 frames.
+    Args:
+        origin_frame_name: name of the tf2 transform corresponding to the origin frame
+        frame_name: name of the tf2 transform corresponding to the destination frame.
+    Returns:
+        pose: 4x4 numpy array containing a homogeneous transform. If all parts were successful, this is the transform from the
+                origin frame to the destination frame, otherwise this is None.
+    '''
+
+    print("Getting robot TCP position...")
+    tfbuffer = tf2_ros.Buffer()
+    tf2_ros.TransformListener(tfbuffer)
+
+    try:
+        tcp = tfbuffer.lookup_transform(origin_frame_name, frame_name, rospy.Time(0), rospy.Duration(timeout))
+    except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        print("Robot TCP not found.")
+        return None
+    
+    translation = np.array([tcp.transform.translation.x, tcp.transform.translation.y, tcp.transform.translation.z])
+    quaternion = [tcp.transform.rotation.x, tcp.transform.rotation.y, tcp.transform.rotation.z, tcp.transform.rotation.w]
+
+    rotation = Rotation.from_quat(quaternion).as_matrix()
+
+    return make4x4matrix(rotation, translation)    
+
 
 def change_reference_frame(rotation, translation, pose):
     """

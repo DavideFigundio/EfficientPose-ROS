@@ -1,8 +1,8 @@
 import rospy
 import geometry_msgs
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import Transform
 from efficientpose_ros.msg import ObjectPoses
+from efficientpose_ros.srv import GetPoses
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation
 import cv2
@@ -21,10 +21,11 @@ class EfficientPoseROS:
     Class encapsulating the functions and features of a ROS node running EfficientPose for inferencing.
     '''
 
-    def __init__(self, phi, path_to_weights, class_to_name, score_threshold, translation_scale_norm, image_topic_name, calibration_topic_name, publish_topic_name, aruco_calibration_mode = 0, arucodata = None):
+    def __init__(self, mode, phi, path_to_weights, class_to_name, score_threshold, translation_scale_norm, image_topic_name,  calibration_topic_name, publish_topic_name = None, service_name = None, aruco_calibration_mode = 0, arucodata = None, base_frame_name = None, aruco_frame_name = None):
         '''
         Creates and initializes a new EfficientPose ROS node.
         Args:
+            mode - (int) determines whether to run in continuous (0) or asynchronous (1) mode.
             phi - (int) hyperparameter that sets dimensions of the neural network.
             path_to_weights - (str) path to a .h5 file containing trained weights for the network.
             class_to_name - dict[int -> str] associates object classes to their names
@@ -32,16 +33,20 @@ class EfficientPoseROS:
             translation_scale_norm - (double) sets the output value's scale unit. 1=m, 100=cm, 1000=mm.
             image_topic_name - (str) name of the topic where the node will search for images to inference.
             calibration_topic_name - (str) name of the topic where the node will search for camera calibration parameters.
-            publish_topic_name - (str) name of the topic where the node will publish inference results.
+            publish_topic_name - (str) name of the topic where the node will publish inference results in continuous mode.
+            service_name - (str) name of the service used to call the network in asynchronous mode.
             aruco_calibration_mode - (int) selects an extrinsic calibration method using an ArUco marker. Options are:
                 0 - no external calibration. Poses will be given in camera reference.
                 1 - one-time calibration at startup. Base pose will not be updated afterwards.
                 2 - continuous calibration. Base pose will be updated for each image.
+                3 - one-time calibration at startup using additional tf2 references.
             arucodata - [list] data used for calibration using ArUco markers. default = None, otherwise must contain in order:
                 aruco_dict: the dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
                 aruco_params: parameters for the aruco detector
                 marker_length: length of the marker side in m
                 marker_id: int representing the ID of the marker to estimate the pose of
+            base_frame_name - (str) name of the frame corresponding to the base in tf2. Only used in calibration mode 3.
+            aruco_frame_name - (str) name of the frame corresponding to the ArUco marker in tf2. Only used in calibration mode 3.
         '''
 
         rospy.init_node("efficientpose", anonymous=True)
@@ -51,6 +56,8 @@ class EfficientPoseROS:
         tf.python.keras.backend.set_session(self.session)
         self.graph = tf.compat.v1.get_default_graph()
         self.bridge = CvBridge()
+        self.image_topic_name = image_topic_name
+        self.mode = mode
 
         # Model input parameters
         self.phi = phi
@@ -75,23 +82,55 @@ class EfficientPoseROS:
             self.base_pose = None
             self.update_base_pose = True
             self.aruco_data = arucodata
+        elif aruco_calibration_mode == 3:
+            self.set_base_pose_with_frames(arucodata, image_topic_name, base_frame_name, aruco_frame_name)
+            self.update_base_pose = False
         else:
             print("Invalid ArUco calibration mode. Defaulting to mode 0.")
             self.base_pose = None
             self.update_base_pose = False
 
         # Setting up rospy communication channels
-        self.publisher = rospy.Publisher(publish_topic_name, ObjectPoses, queue_size=1)
         self.broadcaster = tf2.TransformBroadcaster()
-        rospy.Subscriber(image_topic_name, Image, self.inference, queue_size=1)
-        
 
+        # Continuous mode
+        if self.mode == 0:
+            self.publisher = rospy.Publisher(publish_topic_name, ObjectPoses, queue_size=1)
+            rospy.Subscriber(image_topic_name, Image, self.inference, queue_size=1)
+
+        # Asynchronous mode
+        elif self.mode == 1:
+            self.service = rospy.Service(service_name, GetPoses, self.get_image_and_inference)
+            rospy.spin()
+
+        else:
+            print("Error! Invalid mode given. Must be either 0 for continuous mode or 1 for asynchronous mode.")
+        
+    def get_image_and_inference(self, arg):
+        '''
+        Handler for the service.
+        Args:
+            arg - (string) dummy argument that can be modified and used freely to give commands to the node.
+        returns:
+            names - [string] list of identified objects
+            poses - [geometry_msgs.msg.Transform] list of corresponding poses for the identified objects.
+        '''
+
+        image_message = rospy.wait_for_message(self.image_topic_name, Image, 5)
+        names, poses =  self.inference(image_message)
+        return names, poses
     
     def inference(self, image_message):
         '''
-        Called whenever a new image is found. Performs inference on the image, results are both published as an ObjectPoses object on the self.publisher channel, and broadcasted using tf2.
+        Used to perform inferencing.
+        In synchronous mode, is called whenever a new image is found, and publishes on the self.publisher channel.
+        In asynchronous mode, is called by the service handler and returns the necessary data.
+        In both modes, broadcasts using tf2.
         Args:
-            image_message -  sensor_msgs.msg.Image object containing the image. Automatically passed when used as a callback.
+            image_message -  (sensor_msgs.msg.Image) object containing the image.
+        Returns (asynchronous mode only):
+            labels - [string] list of identified objects
+            transforms - [geometry_msgs.msg.Transform] list of corresponding poses for the identified objects.
         '''
 
         # Turning ROS image message into numpy array.
@@ -142,7 +181,11 @@ class EfficientPoseROS:
 
         msg = ObjectPoses(labels, transforms)
         rospy.loginfo(msg)
-        self.publisher.publish(msg)
+
+        if self.mode == 0:
+            self.publisher.publish(msg)
+        elif self.mode == 1:
+            return labels, transforms
 
 
     def set_base_pose_from_aruco(self, aruco_data, image_topic_name, timeout=5):
@@ -179,6 +222,41 @@ class EfficientPoseROS:
             print("Unable to get image for extrinsic calibration. Poses will be in camera reference.")
             return None
 
+    def set_base_pose_with_frames(self, aruco_data, image_topic_name, base_frame_name, aruco_frame_name, timeout=5):
+        '''
+        Sets the pose of the world frame. Searches for an image on a topic, then looks for an ArUco marker in the image to use as reference
+        Args:
+            aruco_data - list of four elements:
+                0) aruco_dict: dictionary of ArUcos to use, for example cv2.aruco.DICT_5X5_250
+                1) aruco_params: parameters for the aruco detector
+                2) marker_length: length of the marker side in m
+                3) marker_id: int representing the ID of the marker to estimate the pose of
+            image_topic_name - string, name of the topic where the function will search for the image.
+            base_frame_name - (str) name of the frame corresponding to the base in tf2.
+            aruco_frame_name - (str) name of the frame corresponding to the ArUco marker in tf2.
+            timeout - double, timeout for searching for an image.
+        '''
+
+        try:
+            print("Performing extrinsic calibration:\n Searching for calibration image on topic " + image_topic_name)
+             # Getting the image from the topic 
+            image_message = rospy.wait_for_message(image_topic_name, Image, timeout)
+            print(" Found image on topic. Searching for base frame...")
+            image = np.asarray(self.bridge.imgmsg_to_cv2(image_message, desired_encoding='passthrough'))
+
+            # Removing alpha channel, remove if input image is pure RGB
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+            self.base_pose = geo.external_calibration_with_tf2(image, aruco_data, self.camera_matrix, self.distortion, base_frame_name, aruco_frame_name)
+            
+            if self.base_pose is None:
+                print("Unable to find marker for extrinsic calibration. Poses will be in camera reference.")
+            else:
+                print("\nFound marker with pose:\n" + str(self.base_pose))
+
+        except rospy.ROSException:
+            # If no image is found, the world frame is considered to be the camera reference.
+            print("Unable to get image for extrinsic calibration. Poses will be in camera reference.")
+            return None
 
     def update_base_pose_from_aruco(self, aruco_data, image):
         '''

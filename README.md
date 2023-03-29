@@ -32,16 +32,18 @@ To make sure that the interpreter for this environment is used by the node, chan
 
 ## Configuration
 Configuration options can be found and set inside the `start_node.py` script. Here are some of the available options:
+- `mode` - the mode in which to run the node. Two options are available:
+    + `0` - continuous mode. `publish_topic_name` must be specified. The node will inference every time an image is published on `image_topic_name`, and publish the result on `publish_topic_name`.
+    + `1` - asynchronous mode. `service_name` must be specified. The node will advertise a service called `service_name`. Every time this service is requested, it will inference on the most recent image found on `image_topic_name` and reply with the resulting poses.
 - `phi` - the hyperparameter used to set the network's dimensions. Check the [original paper](https://arxiv.org/abs/2011.04307) for more information.
 - `path_to_weights` - the locations where the pre-trained weights are stored. EfficientPose-ROS does not contain any functions for training. For that purpose, check the [original implementation](https://github.com/ybkscht/EfficientPose).
 - `translation_scale_norm` - rescales the network output according to required measurment units. 1 corresponds to metres, 1000 to millimetres.
-- `aruco_calibration_mode` - optional extrinsic camera calibration using [ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) markers. Accepts three values:
+- `aruco_calibration_mode` - optional extrinsic camera calibration using [ArUco](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html) markers. Information on the marker must be given in the `aruco_dict`, `marker_length`, and `marker_ID` fields if necessary. If no marker is found, the node by default will give poses in camera reference. Accepts three values:
     + `0` (default) - Disabled. No calibration is performed. All poses will be given in camera reference.
-    + `1` - Single mode. Extrinsic calibration will be attempted only at startup. If a base frame is found, all inferences will then be given in that frame's reference.
+    + `1` - Single mode. Extrinsic calibration will be attempted only at startup. If a marker is found, all inferences will then be given in that marker's frame of reference.
     + `2` - Continuous mode. Extrinsic calibration will be attempted for each individual image.
-Information on the marker must be given in the `aruco_dict`, `marker_length`, and `marker_ID` fields. If no marker is found, the node by default will give poses in camera reference.
+    + `3` - Single mode with tf2. Similar to `1`, but requires two additional parameters `base_frame_name` and `aruco_frame_name`. Will then search for tf2 transforms with these names, and give poses relative to `base_frame_name`, while considering `aruco_frame_name` to be the position of the ArUco marker.
 - `image_topic_name`, `calibration_topic_name` - names of the ROS topics that the node will use to get images and camera intrinsics. Set these to your convenience. If you don't publish the intrinsics, you can change the camera matrix and distortion parameters' default values inside the `get_camera_params_from_topic` function in `efficientpose.py`.
-- `publish_topic_name` - the name of the topic where the node will publish poses. Poses are published using a custom ObjectPoses message, and are also broadcasted using [tf2](http://wiki.ros.org/tf2).
 
 ## Launching the node
 Assuming you have already launched a master using `roscore` or `roslaunch`:
